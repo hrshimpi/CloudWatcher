@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,15 +15,24 @@ router = APIRouter()
 async def list_anomalies(
     status: str | None = Query(None),
     service: str | None = Query(None),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(400, "start_date must not be after end_date")
+
     filters = []
     if status is not None:
         filters.append(Anomaly.status == status)
     if service is not None:
         filters.append(Anomaly.service == service)
+    if start_date is not None:
+        filters.append(Anomaly.date >= start_date)
+    if end_date is not None:
+        filters.append(Anomaly.date <= end_date)
 
     result = await db.execute(
         select(Anomaly)

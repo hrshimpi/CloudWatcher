@@ -81,3 +81,22 @@ async def test_get_anomaly_by_id(client, db_session):
 async def test_get_anomaly_not_found(client):
     response = await client.get("/anomalies/999999")
     assert response.status_code == 404
+
+
+async def test_list_anomalies_filters_by_date_range(client, db_session):
+    await _seed_anomalies(db_session)
+
+    response = await client.get(
+        "/anomalies", params={"start_date": "2026-01-02", "end_date": "2026-01-02"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["service"] == "Cloud Storage"
+
+
+async def test_list_anomalies_rejects_inverted_date_range(client):
+    response = await client.get(
+        "/anomalies", params={"start_date": "2026-01-05", "end_date": "2026-01-01"}
+    )
+    assert response.status_code == 400

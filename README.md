@@ -1,11 +1,11 @@
 # CloudWatcher
 
-A cloud cost monitoring service: ingests daily cloud billing data, tracks per-service spend, and flags anomalies (unexpected cost spikes) for alerting. FastAPI backend backed by Postgres, React/Vite frontend.
+A cloud cost monitoring service: ingests daily cloud billing data, tracks per-service spend, flags anomalies (unexpected cost spikes), and alerts on them. FastAPI backend backed by Postgres, React dashboard frontend.
 
 ## Stack
 
 - **Backend**: FastAPI, SQLAlchemy 2.0 (async), Alembic, Postgres 15
-- **Frontend**: React, TypeScript, Vite, Tailwind CSS
+- **Frontend**: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, Recharts
 - **Infra**: Docker Compose for local Postgres + backend
 
 ## Project structure
@@ -21,6 +21,10 @@ backend/
   alembic/      # migrations
 frontend/
   src/
+    api/        # typed fetch client
+    components/ # TopNav, KpiRow, CostTrendChart, AnomaliesTable
+    context/    # shared provider/date-range filter state
+    pages/      # Dashboard, ServiceDrilldown, Settings
 docker-compose.yml
 ```
 
@@ -36,7 +40,7 @@ docker-compose.yml
 | Endpoint | Description |
 | --- | --- |
 | `GET /costs/summary` | Total cost + per-service breakdown + daily trend. Filter with `provider`, `start_date`, `end_date`. |
-| `GET /anomalies` | List flagged anomalies. Filter with `status`, `service`; paginate with `limit`/`offset`. |
+| `GET /anomalies` | List flagged anomalies. Filter with `status`, `service`, `start_date`, `end_date`; paginate with `limit`/`offset`. |
 | `GET /anomalies/{id}` | A single anomaly. |
 | `GET /services/{service}/drilldown` | Daily time series + top-N contributing SKUs for one service. Filter with `start_date`, `end_date`, `top_n`. |
 | `GET /config/thresholds` | List alert configs (per-service + the global default where `service` is null). Filter with `service`. |
@@ -68,7 +72,13 @@ npm install
 npm run dev
 ```
 
-Runs on `http://localhost:5173`, proxying `/api` requests to the backend.
+Runs on `http://localhost:5173`, proxying `/api/*` requests to the backend at `http://localhost:8000` (stripping the `/api` prefix — see `vite.config.ts`).
+
+- **Dashboard** (`/`) — a top nav with provider and date-range filters, a KPI row (total spend, change vs. the previous period, active anomalies, biggest spike), a cost trend chart with anomaly days marked, and an anomalies table whose rows expand to show the root-cause explanation.
+- **Service drilldown** (`/services/:service`) — that service's own cost trend plus its top contributing SKUs, over the same date range.
+- **Settings** (`/settings`) — the global Slack webhook URL and Z-score threshold, backed by `GET`/`PUT /config/thresholds`.
+
+All data fetching goes through TanStack Query (`src/api/client.ts`); there's no separate state-management layer beyond the shared provider/date-range filters in `src/context/FiltersContext.tsx`.
 
 ### Database migrations
 
