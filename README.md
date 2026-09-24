@@ -1,6 +1,6 @@
 # CloudWatcher
 
-A small full-stack service for tracking system health. FastAPI backend backed by Postgres, React/Vite frontend.
+A cloud cost monitoring service: ingests daily cloud billing data, tracks per-service spend, and flags anomalies (unexpected cost spikes) for alerting. FastAPI backend backed by Postgres, React/Vite frontend.
 
 ## Stack
 
@@ -14,6 +14,7 @@ A small full-stack service for tracking system health. FastAPI backend backed by
 backend/
   app/
     api/        # route handlers
+    cli/        # CLI entry points (e.g. DB seeding)
     core/       # config, db session
     models/     # SQLAlchemy models
     services/   # business logic
@@ -22,6 +23,13 @@ frontend/
   src/
 docker-compose.yml
 ```
+
+## Data model
+
+- `billing_records` — raw per-SKU line items (provider, account, service, SKU, date, cost)
+- `daily_service_costs` — daily cost rolled up per provider/service
+- `anomalies` — flagged cost anomalies (expected vs. actual, z-score, root cause)
+- `alert_config` — per-service (or global, when `service` is null) alert thresholds and Slack webhook
 
 ## Running locally
 
@@ -56,6 +64,19 @@ poetry run alembic revision --autogenerate -m "message"
 poetry run alembic upgrade head
 ```
 
+### Seeding sample data
+
+There's no live GCP billing export wired up yet, so `seed-db` generates a synthetic dataset instead: 90 days of daily costs across 8 GCP services, with normal day-to-day noise, a recurring weekly pattern on one service (BigQuery runs ~3x heavier every Monday, simulating a batch job — this should be treated as expected, not anomalous), and a few random one-off cost spikes injected as genuine anomalies.
+
+```bash
+cd backend
+poetry run seed-db              # 90 days, truncates existing billing data first
+poetry run seed-db --days 30    # shorter window
+poetry run seed-db --append     # don't truncate first
+```
+
+The command prints which (service, date) pairs it injected as spikes, so you can check that anomaly detection actually catches them.
+
 ### Docker Compose
 
 Spins up Postgres and the backend together:
@@ -63,6 +84,8 @@ Spins up Postgres and the backend together:
 ```bash
 docker compose up --build
 ```
+
+Postgres is published on host port `5434` (mapped to `5432` in the container) to avoid clashing with a locally installed Postgres.
 
 ## Environment variables
 

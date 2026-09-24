@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     postgres_user: str = "cloudwatcher"
     postgres_password: str = "cloudwatcher"
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 5434
     postgres_db: str = "cloudwatcher"
 
     @property

@@ -6,6 +6,9 @@ authors = ["Himanshu Shimpi <hrshimpi999@gmail.com>"]
 readme = "../README.md"
 packages = [{ include = "app" }]
 
+[tool.poetry.scripts]
+seed-db = "app.cli.seed:main"
+
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = "^0.115.0"
