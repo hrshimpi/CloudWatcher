@@ -31,6 +31,20 @@ docker-compose.yml
 - `anomalies` — flagged cost anomalies (expected vs. actual, z-score, root cause)
 - `alert_config` — per-service (or global, when `service` is null) alert thresholds and Slack webhook
 
+## API
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /costs/summary` | Total cost + per-service breakdown + daily trend. Filter with `provider`, `start_date`, `end_date`. |
+| `GET /anomalies` | List flagged anomalies. Filter with `status`, `service`; paginate with `limit`/`offset`. |
+| `GET /anomalies/{id}` | A single anomaly. |
+| `GET /services/{service}/drilldown` | Daily time series + top-N contributing SKUs for one service. Filter with `start_date`, `end_date`, `top_n`. |
+| `GET /config/thresholds` | List alert configs (per-service + the global default where `service` is null). Filter with `service`. |
+| `PUT /config/thresholds` | Create or update the alert config for a `service` (or the global default, when omitted). |
+| `POST /alerts/test` | Send a test Slack message. See [Slack alerting](#slack-alerting). |
+
+All responses are JSON; request/response shapes are defined in `app/schemas/`. Interactive docs are at `http://localhost:8000/docs` once the backend is running.
+
 ## Running locally
 
 ### Backend
@@ -87,12 +101,14 @@ from app.services.anomaly_detection import detect_and_record_anomalies
 anomalies = await detect_and_record_anomalies(session)  # checks "today" for every service
 ```
 
-Run the test suite (uses the synthetic generator above to confirm injected spikes are caught and the weekly BigQuery pattern isn't):
+Run the test suite:
 
 ```bash
 cd backend
 poetry run pytest
 ```
+
+Needs Postgres reachable (same connection info as `.env`) — the API and DB-backed tests run against a separate `cloudwatcher_test` database on that same server, created automatically on first run, so they never touch your local dev/demo data. The anomaly-detection tests use the synthetic generator above to confirm injected spikes are caught and the weekly BigQuery pattern isn't.
 
 ### Slack alerting
 
