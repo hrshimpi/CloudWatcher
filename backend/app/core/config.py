@@ -15,6 +15,18 @@ class Settings(BaseSettings):
     postgres_port: int = 5434
     postgres_db: str = "cloudwatcher"
 
+    # Used for the root-cause guess sent in Slack alerts. If unset, alerting
+    # falls straight back to the templated (numbers-only) explanation.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
+    llm_timeout_seconds: float = 10.0
+
+    slack_timeout_seconds: float = 5.0
+
+    # Safe-by-default: without this, a misconfigured alert_config row would
+    # start posting real Slack messages the moment someone runs detection.
+    alerts_dry_run: bool = True
+
     @property
     def database_url(self) -> str:
         return (

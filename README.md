@@ -94,6 +94,26 @@ cd backend
 poetry run pytest
 ```
 
+### Slack alerting
+
+`app/services/alerting.py` sends a Slack message for each newly flagged anomaly. It asks an LLM (Gemini, via `GEMINI_API_KEY`) for a one-sentence plain-English root-cause guess based on the service, cost delta, % deviation, and top-contributing SKU; on success that replaces the anomaly's templated explanation, and either way the message posts to the webhook configured in `alert_config` (per-service, or the global default row where `service` is null). If the LLM call fails, times out, or no key is set, it silently falls back to the templated explanation — the alert always sends regardless.
+
+```python
+from app.services.alerting import detect_and_alert
+
+results = await detect_and_alert(session)  # detect anomalies, then alert on each one
+```
+
+`ALERTS_DRY_RUN=true` (the default) logs the message instead of posting it — flip it to `false` once a real webhook is set. Send a one-off test message without waiting for a real anomaly:
+
+```bash
+curl -X POST http://localhost:8000/alerts/test \
+  -H "Content-Type: application/json" \
+  -d '{"service": "BigQuery", "slack_webhook_url": "https://hooks.slack.com/services/...", "dry_run": true}'
+```
+
+`slack_webhook_url` is optional — omit it to use whatever's configured in `alert_config` for that service (or the global default).
+
 ### Docker Compose
 
 Spins up Postgres and the backend together:
