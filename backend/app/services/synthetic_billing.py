@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 PROVIDER = "gcp"
@@ -84,6 +84,12 @@ WEEKLY_PATTERN_MULTIPLIER = 3.0
 SPIKE_COUNT_RANGE = (3, 4)
 SPIKE_MULTIPLIER_RANGE = (4.0, 9.0)
 
+# Keep injected spikes out of the first few weeks so any detector relying on
+# rolling/trailing history (30-day window, 21-day minimum, etc.) actually has
+# a baseline to compare against -- a spike on day 3 of a series is untestable
+# by construction, not a detector bug.
+SPIKE_WARMUP_DAYS = 30
+
 
 @dataclass(frozen=True)
 class InjectedSpike:
@@ -109,7 +115,12 @@ def _daily_service_cost(
     cost = baseline * rng.gauss(1.0, noise)
 
     if service == WEEKLY_PATTERN_SERVICE and day.weekday() == WEEKLY_PATTERN_DAY:
-        cost *= WEEKLY_PATTERN_MULTIPLIER
+        # Additive bump, not a multiplier on the noise itself -- a real batch
+        # job adds a consistent extra chunk of work on top of otherwise-normal
+        # variability. Multiplying the noisy cost instead would scale its
+        # variance by 3x too, which no seasonal decomposition could fully
+        # absorb (the "expected" Monday variance really would be higher).
+        cost += (WEEKLY_PATTERN_MULTIPLIER - 1) * baseline
 
     spike_multiplier = spikes_by_day.get(day, {}).get(service)
     if spike_multiplier is not None:
@@ -123,8 +134,12 @@ def _pick_spikes(rng: random.Random, days: list[date]) -> list[InjectedSpike]:
     services = list(SERVICE_PROFILES.keys())
 
     # Avoid spiking the weekly-pattern service on its own pattern day, so the
-    # two "should be treated differently" signals stay cleanly separable.
-    eligible_days = [d for d in days if not (d.weekday() == WEEKLY_PATTERN_DAY)]
+    # two "should be treated differently" signals stay cleanly separable. Also
+    # skip the warm-up period so every spike has real trailing history.
+    warmup_cutoff = days[0] + timedelta(days=SPIKE_WARMUP_DAYS)
+    eligible_days = [
+        d for d in days if d.weekday() != WEEKLY_PATTERN_DAY and d >= warmup_cutoff
+    ]
 
     chosen_days = rng.sample(eligible_days, k=min(spike_count, len(eligible_days)))
     spikes = []
@@ -137,7 +152,7 @@ def _pick_spikes(rng: random.Random, days: list[date]) -> list[InjectedSpike]:
 
 def generate_synthetic_billing_data(
     days: int = 90,
-    seed: int = 42,
+    seed: int = 9,
     end_date: date | None = None,
 ) -> tuple[list[dict], list[dict], list[InjectedSpike]]:
     """Builds `days` worth of synthetic GCP billing data.
@@ -150,7 +165,7 @@ def generate_synthetic_billing_data(
     rng = random.Random(seed)
 
     if end_date is None:
-        end_date = date.today()
+        end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=days - 1)
     all_days = [start_date + timedelta(days=i) for i in range(days)]
 

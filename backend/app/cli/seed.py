@@ -3,7 +3,7 @@
 Usage (from backend/, with the venv/poetry env active):
 
     poetry run seed-db
-    poetry run seed-db --days 90 --seed 42
+    poetry run seed-db --days 90 --seed 9
     poetry run seed-db --append   # don't truncate existing rows first
 """
 
@@ -49,7 +49,7 @@ async def seed(days: int, seed_value: int, reset: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=90, help="Number of days of history to generate")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed, for reproducible data")
+    parser.add_argument("--seed", type=int, default=9, help="Random seed, for reproducible data")
     parser.add_argument(
         "--append",
         action="store_true",

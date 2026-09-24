@@ -77,6 +77,23 @@ poetry run seed-db --append     # don't truncate first
 
 The command prints which (service, date) pairs it injected as spikes, so you can check that anomaly detection actually catches them.
 
+### Anomaly detection
+
+`app/services/anomaly_detection.py` decomposes each service's daily cost history with STL (weekly seasonality) into trend, seasonal, and residual components, then flags a day when its residual is more than 2.5 standard deviations (configurable) from the trailing 30-day residual mean. Services with under 21 days of history are skipped rather than flagged — STL needs more warm-up than a plain rolling average would. Flagged days get their top-contributing SKU looked up and a plain-text explanation, then get written to the `anomalies` table.
+
+```python
+from app.services.anomaly_detection import detect_and_record_anomalies
+
+anomalies = await detect_and_record_anomalies(session)  # checks "today" for every service
+```
+
+Run the test suite (uses the synthetic generator above to confirm injected spikes are caught and the weekly BigQuery pattern isn't):
+
+```bash
+cd backend
+poetry run pytest
+```
+
 ### Docker Compose
 
 Spins up Postgres and the backend together:

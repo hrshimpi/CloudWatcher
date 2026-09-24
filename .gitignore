@@ -31,3 +31,4 @@ npm-debug.log*
 
 # Local dev context (not published)
 DEVELOPMENT.md
+.claude/
