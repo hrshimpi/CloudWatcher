@@ -4,9 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.anomaly import Anomaly
 from app.schemas.anomalies import AnomalyResponse
+from app.schemas.detection import DetectionRunResponse
+from app.services.alerting import detect_and_alert
 
 router = APIRouter()
 
@@ -42,6 +45,26 @@ async def list_anomalies(
         .offset(offset)
     )
     return result.scalars().all()
+
+
+@router.post("/anomalies/detect", response_model=DetectionRunResponse)
+async def trigger_detection(
+    dry_run: bool | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runs anomaly detection for every service, then alerts on anything newly
+    flagged. This is what Cloud Scheduler calls nightly; it's also safe to
+    call manually (e.g. with `?dry_run=true` to see what it would do)."""
+    settings = get_settings()
+    effective_dry_run = settings.alerts_dry_run if dry_run is None else dry_run
+
+    results = await detect_and_alert(db, dry_run=dry_run)
+
+    return DetectionRunResponse(
+        anomalies_processed=len(results),
+        alerts_sent=sum(1 for r in results if r.sent),
+        dry_run=effective_dry_run,
+    )
 
 
 @router.get("/anomalies/{anomaly_id}", response_model=AnomalyResponse)

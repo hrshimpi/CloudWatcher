@@ -181,7 +181,8 @@ async def send_anomaly_alert(
 
 async def _resolve_alert_config(session: AsyncSession, service: str | None) -> AlertConfig | None:
     """Per-service config takes precedence; falls back to the global default
-    row (service IS NULL)."""
+    row (service IS NULL); falls back further to a deploy-time webhook from
+    settings if nobody has configured a global row in the DB yet at all."""
     if service:
         result = await session.execute(
             select(AlertConfig).where(AlertConfig.service == service, AlertConfig.enabled.is_(True))
@@ -193,7 +194,19 @@ async def _resolve_alert_config(session: AsyncSession, service: str | None) -> A
     result = await session.execute(
         select(AlertConfig).where(AlertConfig.service.is_(None), AlertConfig.enabled.is_(True))
     )
-    return result.scalar_one_or_none()
+    global_config = result.scalar_one_or_none()
+    if global_config is not None:
+        return global_config
+
+    settings = get_settings()
+    if settings.slack_webhook_url:
+        return AlertConfig(
+            service=None,
+            z_threshold=DEFAULT_Z_THRESHOLD,
+            slack_webhook_url=settings.slack_webhook_url,
+            enabled=True,
+        )
+    return None
 
 
 async def detect_and_alert(

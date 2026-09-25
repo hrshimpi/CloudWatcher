@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars (gitignored) for local use, or pass these as
+# -var flags / TF_VAR_* env vars in CI. Never commit a real terraform.tfvars.
+
+project_id        = "my-gcp-project-id"
+region            = "us-central1"
+github_repository = "your-username/CloudWatcher"
+
+# Created out-of-band before `terraform init` -- see README.md "Bootstrap".
+terraform_state_bucket = "my-gcp-project-id-cloudwatcher-tfstate"
+
+# Built and pushed by CI; see .github/workflows/deploy.yml. Placeholder
+# values here are only good enough for `terraform validate`, not `apply`.
+api_image      = "us-central1-docker.pkg.dev/my-gcp-project-id/cloudwatcher/api:latest"
+frontend_image = "us-central1-docker.pkg.dev/my-gcp-project-id/cloudwatcher/frontend:latest"
+
+# Secrets -- do not put real values in a committed file. Pass via
+# TF_VAR_slack_webhook_url / TF_VAR_gemini_api_key instead.
+# slack_webhook_url = ""
+# gemini_api_key    = ""
+
+alerts_dry_run = true

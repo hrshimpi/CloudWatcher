@@ -29,6 +29,15 @@ npm-debug.log*
 *.sln
 *.sw?
 
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+
 # Local dev context (not published)
 DEVELOPMENT.md
 .claude/

@@ -1,0 +1,205 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  REGION: us-central1
+  AR_REPO: cloudwatcher
+  CLOUD_SQL_PROXY_VERSION: v2.14.0
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: cloudwatcher
+          POSTGRES_PASSWORD: cloudwatcher
+          POSTGRES_DB: cloudwatcher
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cloudwatcher"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry==1.8.3
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ hashFiles('backend/poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Ruff
+        run: poetry run ruff check app tests
+
+      - name: Pytest
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: cloudwatcher
+          POSTGRES_PASSWORD: cloudwatcher
+          POSTGRES_DB: cloudwatcher
+        run: poetry run pytest
+
+  test-frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  validate-terraform:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform fmt -check -diff
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  # Everything below only runs for a push to main, after all the checks
+  # above pass on that exact commit -- including on main, not just on the
+  # PR that merged into it, so a rebase/squash can't skip verification.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test-backend, test-frontend, validate-terraform]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write # required for Workload Identity Federation
+
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push api image
+        run: |
+          set -eu
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/api:${{ github.sha }}"
+          docker build -t "$IMAGE" ./backend
+          docker push "$IMAGE"
+          echo "API_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Build and push frontend image
+        run: |
+          set -eu
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/frontend:${{ github.sha }}"
+          docker build -t "$IMAGE" ./frontend
+          docker push "$IMAGE"
+          echo "FRONTEND_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # Run migrations against the real Cloud SQL instance *before* Terraform
+      # points Cloud Run at the new image, so new code never sees an
+      # unmigrated schema. The instance itself is expected to already exist
+      # (see infra/README.md's one-time manual bootstrap apply).
+      - name: Fetch Cloud SQL connection info
+        run: |
+          set -eu
+          CONN=$(gcloud sql instances describe "cloudwatcher-prod" --format='value(connectionName)')
+          echo "CLOUD_SQL_CONNECTION_NAME=$CONN" >> "$GITHUB_ENV"
+          echo "DB_PASSWORD=$(gcloud secrets versions access latest --secret=cloudwatcher-db-password)" >> "$GITHUB_ENV"
+
+      - name: Install Cloud SQL Auth Proxy
+        run: |
+          curl -sSL -o cloud-sql-proxy \
+            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/${CLOUD_SQL_PROXY_VERSION}/cloud-sql-proxy.linux.amd64"
+          chmod +x cloud-sql-proxy
+
+      - name: Run database migrations
+        working-directory: backend
+        run: |
+          set -eu
+          ../cloud-sql-proxy --port 5432 "$CLOUD_SQL_CONNECTION_NAME" &
+          proxy_pid=$!
+          trap 'kill $proxy_pid' EXIT
+
+          for _ in $(seq 1 30); do
+            nc -z 127.0.0.1 5432 && break
+            sleep 1
+          done
+
+          pipx install poetry==1.8.3
+          poetry install --no-interaction --only main
+
+          POSTGRES_HOST=127.0.0.1 \
+          POSTGRES_PORT=5432 \
+          POSTGRES_USER=cloudwatcher \
+          POSTGRES_PASSWORD="$DB_PASSWORD" \
+          POSTGRES_DB=cloudwatcher \
+            poetry run alembic upgrade head
+
+      - name: Terraform apply
+        working-directory: infra
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ env.REGION }}
+          TF_VAR_github_repository: ${{ github.repository }}
+          TF_VAR_terraform_state_bucket: ${{ secrets.GCP_TERRAFORM_STATE_BUCKET }}
+          TF_VAR_api_image: ${{ env.API_IMAGE }}
+          TF_VAR_frontend_image: ${{ env.FRONTEND_IMAGE }}
+          TF_VAR_slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_alerts_dry_run: "false"
+        run: |
+          terraform init -backend-config="bucket=${{ secrets.GCP_TERRAFORM_STATE_BUCKET }}"
+          terraform apply -auto-approve

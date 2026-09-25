@@ -35,5 +35,11 @@ build-backend = "poetry.core.masonry.api"
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint]
+# B008: FastAPI's Depends()/Query() are meant to be called in argument
+# defaults -- that's the framework's own dependency-injection pattern, not
+# a bug. This is a well-known false positive for FastAPI code.
+ignore = ["B008"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

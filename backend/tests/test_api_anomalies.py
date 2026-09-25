@@ -95,6 +95,23 @@ async def test_list_anomalies_filters_by_date_range(client, db_session):
     assert data[0]["service"] == "Cloud Storage"
 
 
+async def test_trigger_detection_with_no_billing_data_is_a_safe_noop(client):
+    # No daily_service_costs rows at all -> no services to evaluate -> no
+    # anomalies, no alert lookups, no Gemini/Slack calls. This is the one
+    # case guaranteed not to hit either external API, so it's safe to run
+    # for real rather than mocking the pipeline.
+    response = await client.post("/anomalies/detect")
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {"anomalies_processed": 0, "alerts_sent": 0, "dry_run": True}
+
+
+async def test_trigger_detection_respects_dry_run_override(client):
+    response = await client.post("/anomalies/detect", params={"dry_run": "false"})
+    assert response.status_code == 200
+    assert response.json()["dry_run"] is False
+
+
 async def test_list_anomalies_rejects_inverted_date_range(client):
     response = await client.get(
         "/anomalies", params={"start_date": "2026-01-05", "end_date": "2026-01-01"}

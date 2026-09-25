@@ -6,7 +6,7 @@ A cloud cost monitoring service: ingests daily cloud billing data, tracks per-se
 
 - **Backend**: FastAPI, SQLAlchemy 2.0 (async), Alembic, Postgres 15
 - **Frontend**: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, Recharts
-- **Infra**: Docker Compose for local Postgres + backend
+- **Infra**: Docker Compose for local dev; Terraform + GitHub Actions for GCP (Cloud Run, Cloud SQL, Secret Manager, Cloud Scheduler) — see [Deployment](#deployment)
 
 ## Project structure
 
@@ -46,6 +46,7 @@ docker-compose.yml
 | `GET /config/thresholds` | List alert configs (per-service + the global default where `service` is null). Filter with `service`. |
 | `PUT /config/thresholds` | Create or update the alert config for a `service` (or the global default, when omitted). |
 | `POST /alerts/test` | Send a test Slack message. See [Slack alerting](#slack-alerting). |
+| `POST /anomalies/detect` | Run detection for every service and alert on anything newly flagged. What Cloud Scheduler calls nightly in production; safe to call manually (`?dry_run=true` to preview). |
 
 All responses are JSON; request/response shapes are defined in `app/schemas/`. Interactive docs are at `http://localhost:8000/docs` once the backend is running.
 
@@ -148,8 +149,16 @@ Spins up Postgres and the backend together:
 docker compose up --build
 ```
 
-Postgres is published on host port `5434` (mapped to `5432` in the container) to avoid clashing with a locally installed Postgres.
+Postgres is published on host port `5434` (mapped to `5432` in the container) to avoid clashing with a locally installed Postgres. The backend container listens on `8080` internally (matching Cloud Run's convention — see Deployment below) and is published on host port `8000`, so `http://localhost:8000` works the same as running it directly with Poetry.
 
 ## Environment variables
 
 See `backend/.env.example` for the variables the backend reads (Postgres connection details, app name, environment).
+
+## Deployment
+
+`backend/Dockerfile` and `frontend/Dockerfile` build production images: the backend as a multi-stage Poetry build running as a non-root user, the frontend as a static Vite build served by nginx, which also reverse-proxies `/api/*` to the backend's URL at runtime (so the browser only ever talks to one origin, and the backend never needs CORS configured — see `frontend/nginx.conf.template`).
+
+`infra/` has Terraform for the GCP side: two Cloud Run services (`api`, `frontend`), Cloud SQL Postgres (connected via Cloud Run's built-in Cloud SQL Auth Proxy integration), Secret Manager entries for the Slack webhook and Gemini API key, a nightly Cloud Scheduler job hitting `POST /anomalies/detect`, an Artifact Registry repo, and the IAM to wire it together — including Workload Identity Federation so GitHub Actions never holds a service account key. See `infra/README.md` for the one-time bootstrap steps (state bucket, first manual apply, repo secrets).
+
+`.github/workflows/ci-cd.yml` runs backend (pytest + ruff) and frontend (build + lint) checks plus `terraform validate` on every PR and push; on a push to `main`, once those pass, it builds and pushes both images to Artifact Registry, runs `alembic upgrade head` against Cloud SQL through the Auth Proxy, and applies the Terraform to roll the new images out to Cloud Run.
