@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import groupby
 
 import pandas as pd
 from sqlalchemy import func, select
@@ -163,26 +164,27 @@ async def detect_and_record_anomalies(
     and writes any flagged days to the `anomalies` table."""
     as_of = as_of or datetime.now(UTC).date()
 
-    services_result = await session.execute(
-        select(DailyServiceCost.provider, DailyServiceCost.service)
+    # One query for every service's full history, rather than one query per
+    # service (which was N+1 -- the 8-service demo dataset meant 9 round
+    # trips to fetch what's really a single table scan). Ordering by
+    # provider then service then date lets groupby() split it back into
+    # per-service series without needing the DB to do the grouping.
+    history_result = await session.execute(
+        select(
+            DailyServiceCost.provider,
+            DailyServiceCost.service,
+            DailyServiceCost.date,
+            DailyServiceCost.total_cost,
+        )
         .where(DailyServiceCost.date <= as_of)
-        .distinct()
+        .order_by(DailyServiceCost.provider, DailyServiceCost.service, DailyServiceCost.date)
     )
-    service_rows = services_result.all()
+    all_rows = history_result.all()
 
     created: list[Anomaly] = []
 
-    for provider, service in service_rows:
-        history_result = await session.execute(
-            select(DailyServiceCost.date, DailyServiceCost.total_cost)
-            .where(
-                DailyServiceCost.provider == provider,
-                DailyServiceCost.service == service,
-                DailyServiceCost.date <= as_of,
-            )
-            .order_by(DailyServiceCost.date)
-        )
-        rows = history_result.all()
+    for (provider, service), rows_iter in groupby(all_rows, key=lambda row: (row.provider, row.service)):
+        rows = list(rows_iter)
         dates = [row.date for row in rows]
         costs = [float(row.total_cost) for row in rows]
 
